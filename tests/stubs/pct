@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Fake pct for the test cluster. A container is $QT/ct/<vmid>: "running" marks it running, and
+# run/ is its /run (the test mounts a tmpfs there, or not). "pct exec" runs the command in a
+# bubblewrap sandbox that sees that run/ as /run.
+set -euo pipefail
+op=$1 vmid=$2; shift 2
+ct=$QT/ct/$vmid
+case $op in
+  status)
+    if [[ -e $ct/running ]]; then echo "status: running"; else echo "status: stopped"; fi
+    ;;
+  exec)
+    [[ -e $ct/running ]] || { echo "CT $vmid not running" >&2; exit 1; }
+    while (( $# )) && [[ $1 != -- ]]; do shift; done
+    shift
+    exec bwrap --ro-bind / / --bind "$ct/run" /run --dev /dev --proc /proc -- "$@"
+    ;;
+  *) echo "pct stub: $op not supported" >&2; exit 2 ;;
+esac

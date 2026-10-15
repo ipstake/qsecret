@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Fake systemd-creds for the test cluster. A "credential" is bound to the node that made it
+# (taken from QSECRET_ROOT), like a TPM-bound one: another node cannot decrypt it.
+# $QT/tpmbroken/<node> makes decrypt fail on that node.
+set -euo pipefail
+node=$(basename "${QSECRET_ROOT:?}")
+op=$1; shift
+name=""
+args=()
+for a in "$@"; do
+  case $a in
+    --name=*) name=${a#--name=} ;;
+    --with-key=* | --tpm2-pcrs=*) ;;
+    *) args+=("$a") ;;
+  esac
+done
+case $op in
+  encrypt)  # encrypt [opts] - <out>
+    printf 'qsfake1 %s %s %s\n' "$node" "$name" "$(base64 -w0)" >"${args[1]}"
+    ;;
+  decrypt)  # decrypt [opts] <in> -
+    [[ ! -e $QT/tpmbroken/$node ]] || { echo "TPM2 operation failed (test)" >&2; exit 1; }
+    read -r magic cnode cname data <"${args[0]}"
+    [[ $magic == qsfake1 && $cnode == "$node" && $cname == "$name" ]] ||
+      { echo "credential not for this node or name (test)" >&2; exit 1; }
+    printf '%s' "$data" | base64 -d
+    ;;
+  *) echo "systemd-creds stub: $op not supported" >&2; exit 2 ;;
+esac

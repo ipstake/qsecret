@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Fake pveversion: $QSECRET_ROOT/pveversion overrides the default Proxmox VE 9 answer.
+cat "${QSECRET_ROOT:?}/pveversion" 2>/dev/null || echo "pve-manager/9.1.9/0000000000000000 (running kernel: 7.0.0-3-pve)"

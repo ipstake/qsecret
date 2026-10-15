@@ -1,0 +1,70 @@
+# Build a draft release for a signed tag. CI never signs anything: the maintainer checks the
+# draft against the tag and signs SHA256SUMS with a hardware key (scripts/release.sh).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  draft:
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the tag
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # checkout leaves a lightweight copy of the pushed tag; fetch the signed tag object.
+          # The token goes in through git's environment config, not argv, and is not stored.
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            git fetch -q --force origin "refs/tags/$TAG:refs/tags/$TAG" "+refs/heads/main:refs/remotes/origin/main"
+          [ "$(git cat-file -t "$TAG")" = tag ] || { echo "$TAG is not an annotated, signed tag"; exit 1; }
+          # The name inside the signed tag must be the pushed name: an old signed tag pushed
+          # under a new name would otherwise pass.
+          [ "$(git cat-file tag "$TAG" | sed -n 's/^tag //p')" = "$TAG" ] || { echo "tag object name differs from $TAG"; exit 1; }
+          git merge-base --is-ancestor "$TAG" origin/main || { echo "$TAG is not on main"; exit 1; }
+          # Signed by a release key from get.sh, as a git signature under the tagger's email.
+          email=$(git for-each-ref --format='%(taggeremail:trim)' "refs/tags/$TAG")
+          awk -v email="$email" '
+            /^  local signers=/ { on = 1; sub(/^  local signers=\x27/, "") }
+            on { line = $0; done = sub(/\x27$/, "", line); n = split(line, f, " ")
+                 printf "%s namespaces=\"git\"", email; for (i = 3; i <= n; i++) printf " %s", f[i]; print ""
+                 if (done) exit }' get.sh >"$RUNNER_TEMP/allowed_signers"
+          test -s "$RUNNER_TEMP/allowed_signers"
+          git -c gpg.ssh.allowedSignersFile="$RUNNER_TEMP/allowed_signers" verify-tag "$TAG"
+
+      - name: Build tarball and SHA256SUMS
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="qsecret-$TAG/" -o "dist/qsecret-$TAG.tar.gz" "$TAG" -- \
+            README.md LICENSE get.sh install.sh qsecret \
+            qsecret-push.service qsecret-push.timer qsecret-check.service qsecret-check.timer
+          (cd dist && sha256sum "qsecret-$TAG.tar.gz" >SHA256SUMS && cat SHA256SUMS)
+
+      - name: Create draft release
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""; [[ $TAG == v0.* || $TAG == *-* ]] && pre=--prerelease
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft $pre --verify-tag \
+            --title "qsecret $TAG" --notes "Draft: not signed yet." \
+            dist/qsecret-$TAG.tar.gz dist/SHA256SUMS

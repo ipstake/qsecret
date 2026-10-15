@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Fake ssh for the test cluster: "ssh [opts] root@<ip> <command...>" runs the command as the
+# fake node that owns <ip>. $QT/down/<node> (offline) or $QT/unreach/<node> (online in
+# .members but no SSH) makes the node unreachable. $QT/enrollfail/<node>
+# makes "qsecret enroll" fail there.
+set -euo pipefail
+while (( $# )) && [[ $1 != root@* ]]; do
+  case $1 in -o) shift 2 ;; *) shift ;; esac
+done
+ip=${1#root@}; shift
+node=$(cat "$QT/ips/$ip" 2>/dev/null) || { echo "ssh: no route to $ip" >&2; exit 255; }
+[[ ! -e $QT/down/$node && ! -e $QT/unreach/$node ]] || { echo "ssh: connect to $ip: timed out" >&2; exit 255; }
+cmd="$*"
+if [[ $cmd == *" enroll "* && -e $QT/enrollfail/$node ]]; then
+  echo "enroll failed on $node (test)" >&2
+  exit 1
+fi
+QSECRET_ROOT=$QT/node/$node SSH_CONNECTION="10.0.0.99 22 $ip 22" exec bash -c "$cmd"

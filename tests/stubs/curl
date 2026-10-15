@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Fake curl for tests/test_get.sh: plays the GitHub API and download URLs from $QT_GET/srv.
+# Logs every call's arguments to $QT_GET/curl.log. "releases/latest" answers 404, as GitHub
+# does when only pre-releases exist. Asset downloads need "-H @file" holding the test token.
+set -uo pipefail
+out="" url="" hdrs=()
+echo "$*" >>"$QT_GET/curl.log"
+while (( $# )); do
+  case $1 in
+    -o) out=$2; shift 2 ;;
+    -H) hdrs+=("$2"); shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+srv=$QT_GET/srv
+emit() { if [[ -n $out ]]; then cat >"$out"; else cat; fi; }
+serve() { [[ -f $1 ]] || exit 22; emit <"$1"; }
+case $url in
+  */releases/latest) exit 22 ;;
+  */releases\?per_page=*) serve "$srv/list.json" ;;
+  */releases/tags/*) serve "$srv/tag-${url##*/}.json" ;;
+  */releases/assets/*)
+    ok=0
+    for h in "${hdrs[@]}"; do [[ $h == @* ]] && grep -q "Bearer test-token" "${h#@}" && ok=1; done
+    (( ok )) || exit 22
+    serve "$srv/asset-${url##*/}" ;;
+  https://github.com/*/releases/download/*) serve "$srv/${url##*/}" ;;
+  *) exit 22 ;;
+esac
